@@ -1,0 +1,10 @@
+# 微博平台配置
+platform: "weibo"
+base_url: "https://weibo.com"
+api_base: "https://weibo.com/ajax"
+rate_limit:
+  requests_per_second: 1.0
+# 注意：微博用户信息获取需要登录态 Cookie，请将 Cookie 放在 data/cookies/weibo.json
+# Cookie 文件格式: { "cookie": "SUB=xxx; ...", "uid": "123456" }
+endpoints:
+  user_info: "/profile/detail"

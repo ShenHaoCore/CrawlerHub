@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+.deps/
+
+# Poetry
+poetry.lock
+
+# IDE
+.vscode/
+.idea/
+.trae/
+*.swp
+*.swo
+
+# Data / secrets
+data/cookies/*.json
+data/proxies/*.txt
+data/output/
+*.db
+*.sqlite3
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log

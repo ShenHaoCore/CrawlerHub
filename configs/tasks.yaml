@@ -1,0 +1,30 @@
+# 多平台并发任务配置
+# 用法: python -m crawlerhub
+#
+# 每个平台独立配置 uids，各平台并发执行
+# crawl_related: 启用关联用户爬取（粉丝+关注列表），1 层深度
+#
+# 持续运行：设置 schedule.enabled = true，interval 为两次运行间隔（秒）
+# 例如 interval: 3600 表示每小时运行一次
+
+schedule:
+  enabled: false          # 是否启用定时持续运行
+  interval: 3600          # 运行间隔（秒），默认 1 小时
+
+platforms:
+  weibo:
+    uids:
+      - "3967904204"
+    crawl_related: true        # 启用关联用户爬取
+    max_related_per_user: 20   # 每个用户最多爬取多少个关联用户（建议 <= 20 避免风控）
+    max_depth: 2               # 关联用户最大爬取深度（1=直接关联，2=关联的关联，以此类推）
+    # cookie_file: "data/cookies/weibo.json"
+    # storage: "json"
+
+  douyin:
+    uids:
+      - "MS4wLjABAAAAkDXNNbahsEaH0RvQdyOBYVPJEFW5HBchWpxMQz65HsM"
+    crawl_related: true
+    max_related_per_user: 20
+    max_depth: 2
+    # cookie_file: "data/cookies/douyin.json"

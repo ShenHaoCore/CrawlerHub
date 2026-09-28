@@ -1,0 +1,10 @@
+# 抖音平台配置
+platform: "douyin"
+base_url: "https://www.douyin.com"
+api_base: "https://www.douyin.com/aweme/v1/web"
+rate_limit:
+  requests_per_second: 1.0
+# 注意：抖音用户信息获取需要登录态 Cookie，请将 Cookie 放在 data/cookies/douyin.json
+# Cookie 文件格式: { "cookie": "ttwid=xxx; ..." }
+endpoints:
+  user_info: "/user/profile/other"

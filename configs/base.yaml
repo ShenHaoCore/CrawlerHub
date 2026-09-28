@@ -1,0 +1,52 @@
+# CrawlerHub 全局基础配置
+# 合规提示：请仅在遵守目标平台 robots.txt、服务条款及相关法律法规的前提下使用本框架。
+
+request:
+  timeout: 30              # 单次请求超时(秒)
+  max_retries: 3           # 最大重试次数
+  retry_backoff: 2.0       # 重试退避基数(秒)
+  concurrency: 3           # 并发请求数
+  rate_limit:
+    enabled: true
+    requests_per_second: 0.8   # 全局限速(请求/秒)，建议 <= 1.0 避免触发风控
+  # 每次请求后的随机延迟范围(秒)，模拟人工操作间隔
+  request_delay:
+    min: 1.0
+    max: 3.0
+  # 触发反爬后的熔断退避时间(秒)
+  anti_crawl_cooldown: 60
+
+proxy:
+  enabled: false
+  pool_file: "data/proxies/proxies.txt"
+  # 代理格式一行一个，如: http://user:pass@host:port
+
+user_agent:
+  rotation: true
+  # 自定义 UA 列表留空则使用 fake-useragent 随机生成
+  custom_uas: []
+
+dedup:
+  backend: "memory"         # redis | memory（本地开发默认用 memory，生产环境可改 redis）
+  redis:
+    host: "127.0.0.1"
+    port: 6379
+    db: 0
+    ttl: 86400             # 去重键过期时间(秒)
+
+storage:
+  default: "json"          # json | csv | sqlite
+  output_dir: "data/output"
+  sqlite:
+    url: "sqlite:///data/crawlerhub.db"
+
+cookie:
+  dir: "data/cookies"
+  auto_refresh: false
+  refresh_interval: 1800   # Cookie 刷新间隔(秒)
+
+logging:
+  level: "INFO"
+  file: "logs/crawlerhub.log"
+  rotation: "10 MB"
+  retention: "7 days"
