@@ -1,0 +1,32 @@
+# 中国行政区划平台配置（数据来源：民政部·国家地名信息库）
+#
+# 接口文档：https://dmfw.mca.gov.cn/baseHtmls/index.htm
+# 数据发布页：https://dmfw.mca.gov.cn/XzqhVersionPublish.html
+#
+# 数据口径：省、地、县、乡四级，每年 1 月发布截至上一年末的数据。
+# 接口不返回面积、人口、驻地等属性，只有 代码 / 名称 / 级别 / 类型。
+
+platform: "xzqh"
+api_base: "https://dmfw.mca.gov.cn/9095/xzqh"
+# 该接口挂在 WAF 之后，缺失 Referer 会直接 403，不要删
+referer: "https://dmfw.mca.gov.cn/XzqhVersionPublish.html"
+
+# 按代码抓子树时的展开层数（1=只到下级，3=到县级）。
+# 注意：乡级只在根为地级或县级时才会返回，以省为根最多到县级。
+subtree_max_level: 3
+# 数据年份，留空表示使用接口最新版（不支持注释掉的键，需要时手动填整数）
+# year: 2025
+
+# 全量快照输出，每次运行覆盖写入
+snapshot:
+  max_level: 4                                      # 4 = 全国四级；1~3 只需一次请求
+  tree_output: "data/output/xzqh_tree.json"         # 嵌套树，结构直观、体积最小
+  flat_output: "data/output/xzqh_divisions.jsonl"   # 扁平记录，每行一条，便于导入
+
+# 政府开放接口，无需反爬对抗，可适度提速
+request:
+  rate_limit:
+    requests_per_second: 2.0
+  request_delay:
+    min: 0.2
+    max: 0.6

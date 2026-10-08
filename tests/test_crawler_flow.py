@@ -9,8 +9,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import patch
+from typing import Any
 
 import httpx
 import pytest
@@ -217,6 +216,125 @@ class TestDouyinCrawlerFlow:
 
         with pytest.raises(LoginRequiredError, match="需要登录态 Cookie"):
             await crawler.fetch_user("MS4wLjABAAAAxxx")
+
+
+class TestLoginFailureEscalation:
+    """登录态失效是**会话级**致命错误，必须向上传播。
+
+    否则任务会以「抓到 0 条 + status: ok」收尾——摘要看起来一切正常，
+    实际上整批数据一条都没拿到。这是本次修复的核心动机。
+    """
+
+    @staticmethod
+    def _inject(crawler: Any, handler) -> None:
+        """把 mock 客户端注入爬虫（沿用本文件既有的 setup 替换手法）。"""
+        original_setup = crawler.setup
+
+        async def mock_setup():
+            await original_setup()
+            make_mock_client(crawler, handler)
+
+        crawler.setup = mock_setup
+
+    @staticmethod
+    def _weibo_crawler(tmp_cookie_file: Path, tmp_path: Path) -> WeiboCrawler:
+        return WeiboCrawler(
+            config=Config(
+                {"request": {"timeout": 10, "max_retries": 1},
+                 "storage": {"default": "json", "output_dir": str(tmp_path)},
+                 "dedup": {"backend": "memory"}},
+                {"platform": "weibo", "api_base": "https://weibo.com/ajax"},
+            ),
+            cookie_manager=CookieManager(tmp_cookie_file),
+            storage=JsonStorage(tmp_path),
+            dedup=MemoryDedup(),
+        )
+
+    async def test_weibo_login_redirect_propagates(
+        self, tmp_cookie_file: Path, tmp_path: Path
+    ) -> None:
+        """Cookie 失效 -> 302 到登录页 -> 任务失败，而不是报 ok / 0 条。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "login" in str(request.url):
+                return httpx.Response(
+                    200,
+                    content="<html>请登录</html>".encode("gbk"),
+                    headers={"content-type": "text/html; charset=utf-8"},
+                )
+            return httpx.Response(
+                302,
+                headers={"location": "https://login.sina.com.cn/sso/login.php?url=x"},
+            )
+
+        crawler = self._weibo_crawler(tmp_cookie_file, tmp_path)
+        self._inject(crawler, handler)
+
+        with pytest.raises(LoginRequiredError, match="重定向到登录页"):
+            await crawler.run(["123456"], crawl_related=True, max_depth=1)
+
+    async def test_weibo_business_code_propagates(
+        self, tmp_cookie_file: Path, tmp_path: Path
+    ) -> None:
+        """Cookie 失效 -> 200 + ``ok=-100`` -> 同样必须失败。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={"ok": -100, "url": "https://weibo.com/login.php?url=x"},
+            )
+
+        crawler = self._weibo_crawler(tmp_cookie_file, tmp_path)
+        self._inject(crawler, handler)
+
+        with pytest.raises(LoginRequiredError):
+            await crawler.run(["123456"])
+
+    async def test_douyin_not_logged_in_propagates(
+        self, tmp_cookie_file: Path, tmp_path: Path
+    ) -> None:
+        """抖音 ``status_code=8``（未登录）同样必须失败。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, json={"status_code": 8, "status_msg": "用户未登录"}
+            )
+
+        crawler = DouyinCrawler(
+            config=Config(
+                {"request": {"timeout": 10, "max_retries": 1},
+                 "storage": {"default": "json", "output_dir": str(tmp_path)},
+                 "dedup": {"backend": "memory"}},
+                {"platform": "douyin", "api_base": "https://www.douyin.com/aweme/v1/web"},
+            ),
+            cookie_manager=CookieManager(tmp_cookie_file),
+            storage=JsonStorage(tmp_path),
+            dedup=MemoryDedup(),
+        )
+        self._inject(crawler, handler)
+
+        with pytest.raises(LoginRequiredError, match="status_code=8"):
+            await crawler.run(["MS4wLjABAAAAxxx"])
+
+    async def test_related_expansion_failure_degrades_gracefully(
+        self, tmp_cookie_file: Path, weibo_raw_data, weibo_detail_data, tmp_path: Path
+    ) -> None:
+        """关联用户拉取失败只降级：已抓到的用户必须保留，任务不算失败。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "/profile/info" in url:
+                return httpx.Response(200, json=weibo_raw_data)
+            if "/profile/detail" in url:
+                return httpx.Response(200, json=weibo_detail_data)
+            return httpx.Response(500, text="boom")
+
+        crawler = self._weibo_crawler(tmp_cookie_file, tmp_path)
+        self._inject(crawler, handler)
+
+        results = await crawler.run(["123456"], crawl_related=True, max_depth=1)
+
+        assert [r["user_id"] for r in results] == ["123456"]
 
 
 class TestSqliteIntegration:

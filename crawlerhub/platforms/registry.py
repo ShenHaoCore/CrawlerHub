@@ -13,11 +13,13 @@ from typing import Dict, Type
 from crawlerhub.core.base import BaseCrawler
 from crawlerhub.platforms.douyin.crawler import DouyinCrawler
 from crawlerhub.platforms.weibo.crawler import WeiboCrawler
+from crawlerhub.platforms.xzqh.crawler import XzqhCrawler
 
 # 平台名称 -> 爬虫类 的注册表
 PLATFORM_REGISTRY: Dict[str, Type[BaseCrawler]] = {
     "weibo": WeiboCrawler,
     "douyin": DouyinCrawler,
+    "xzqh": XzqhCrawler,
 }
 
 

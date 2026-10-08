@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any, Dict
 
@@ -59,6 +60,22 @@ class Config:
             else:
                 result[key] = value
         return result
+
+    def override(self, overrides: Dict[str, Any]) -> "Config":
+        """就地叠加一层覆盖配置，用于任务级参数覆盖。
+
+        覆盖按深度合并到已合并结果上（覆盖项优先）。因为合并前会对当前
+        结果做深拷贝，所以多个 ``Config`` 实例之间不会因为共享嵌套字典而
+        互相污染，可安全用于并发任务。
+
+        Args:
+            overrides: 要覆盖的配置字典。
+
+        Returns:
+            ``self``，便于链式调用。
+        """
+        self._merged = self._deep_merge(copy.deepcopy(self._merged), overrides)
+        return self
 
     def get(self, key: str, default: Any = None) -> Any:
         """获取配置值，支持点号分隔的嵌套路径。

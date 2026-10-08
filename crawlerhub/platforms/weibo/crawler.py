@@ -10,10 +10,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from crawlerhub.core.exceptions import LoginRequiredError, ParseError
+from crawlerhub.core.client import parse_json_response
+from crawlerhub.core.exceptions import LoginRequiredError
 from crawlerhub.core.logger import logger
 from crawlerhub.platforms.base import BaseCrawler
-from crawlerhub.platforms.weibo.parser import parse_follow_list, parse_user_info
+from crawlerhub.platforms.weibo.parser import (
+    parse_follow_list,
+    parse_user_info,
+    raise_if_login_required,
+)
 
 
 class WeiboCrawler(BaseCrawler):
@@ -62,20 +67,16 @@ class WeiboCrawler(BaseCrawler):
         info_resp = await self.client.get(
             info_url, params=params, headers=headers, cookies=cookies
         )
-        try:
-            info_raw = info_resp.json()
-        except ValueError as exc:
-            raise ParseError(f"微博 profile/info 返回非 JSON: {exc}") from exc
+        info_raw = parse_json_response(info_resp, context="微博 profile/info")
+        raise_if_login_required(info_raw, api="profile/info")
 
         # 2. /profile/detail — 简介、性别、注册时间等
         detail_url = f"{self.api_base}/profile/detail"
         detail_resp = await self.client.get(
             detail_url, params=params, headers=headers, cookies=cookies
         )
-        try:
-            detail_raw = detail_resp.json()
-        except ValueError as exc:
-            raise ParseError(f"微博 profile/detail 返回非 JSON: {exc}") from exc
+        detail_raw = parse_json_response(detail_resp, context="微博 profile/detail")
+        raise_if_login_required(detail_raw, api="profile/detail")
 
         logger.debug(f"[weibo] info 返回: {str(info_raw)[:300]}")
         logger.debug(f"[weibo] detail 返回: {str(detail_raw)[:300]}")
@@ -137,10 +138,8 @@ class WeiboCrawler(BaseCrawler):
             resp = await self.client.get(
                 url, params=params, headers=headers, cookies=cookies
             )
-            try:
-                raw = resp.json()
-            except ValueError as exc:
-                raise ParseError(f"微博 {follow_type} 列表返回非 JSON: {exc}") from exc
+            raw = parse_json_response(resp, context=f"微博 {follow_type} 列表")
+            raise_if_login_required(raw, api=f"friendships/friends({follow_type})")
 
             page_uids = parse_follow_list(raw)
             if not page_uids:

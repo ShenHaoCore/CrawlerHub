@@ -66,3 +66,109 @@ def douyin_raw_data() -> Dict[str, Any]:
             "region": "CN",
         }
     }
+
+
+def make_xzqh_node(
+    code: str,
+    name: str | None,
+    level: int,
+    node_type: str,
+    children: list | None = None,
+) -> Dict[str, Any]:
+    """构造一个区划节点，减少区划 fixture 中的样板代码。"""
+    return {
+        "code": code,
+        "name": name,
+        "level": level,
+        "type": node_type,
+        "children": children or [],
+    }
+
+
+@pytest.fixture
+def xzqh_phase1_tree() -> Dict[str, Any]:
+    """``code=&maxLevel=3`` 的模拟返回：省 / 地 / 县三级，不含乡级。
+
+    结构刻意覆盖三种形态：
+
+    - 湖北省 -> 武汉市(地级) -> 江岸区/武昌区(县级)
+    - 湖北省 -> 仙桃市（省直辖县级单位，直接挂在省下）
+    - 北京市(直辖市) -> 东城区（跳过地级层）
+    """
+    return make_xzqh_node(
+        "00",
+        None,
+        0,
+        "",
+        [
+            make_xzqh_node(
+                "420000000000",
+                "湖北省",
+                1,
+                "省",
+                [
+                    make_xzqh_node(
+                        "420100000000",
+                        "武汉市",
+                        2,
+                        "地级市",
+                        [
+                            make_xzqh_node("420102000000", "江岸区", 3, "市辖区"),
+                            make_xzqh_node("420106000000", "武昌区", 3, "市辖区"),
+                        ],
+                    ),
+                    make_xzqh_node("429004000000", "仙桃市", 3, "县级市"),
+                ],
+            ),
+            make_xzqh_node(
+                "110000000000",
+                "北京市",
+                1,
+                "直辖市",
+                [make_xzqh_node("110101000000", "东城区", 3, "市辖区")],
+            ),
+        ],
+    )
+
+
+@pytest.fixture
+def xzqh_phase2_subtrees() -> Dict[str, Any]:
+    """第二阶段各下钻代码的模拟返回（补全乡级）。"""
+    return {
+        "420100000000": make_xzqh_node(
+            "420100000000",
+            "武汉市",
+            2,
+            "地级市",
+            [
+                make_xzqh_node(
+                    "420102000000",
+                    "江岸区",
+                    3,
+                    "市辖区",
+                    [make_xzqh_node("420102002000", "大智街道", 4, "街道")],
+                ),
+                make_xzqh_node(
+                    "420106000000",
+                    "武昌区",
+                    3,
+                    "市辖区",
+                    [make_xzqh_node("420106003000", "中南路街道", 4, "街道")],
+                ),
+            ],
+        ),
+        "429004000000": make_xzqh_node(
+            "429004000000",
+            "仙桃市",
+            3,
+            "县级市",
+            [make_xzqh_node("429004001000", "干河街道", 4, "街道")],
+        ),
+        "110101000000": make_xzqh_node(
+            "110101000000",
+            "东城区",
+            3,
+            "市辖区",
+            [make_xzqh_node("110101001000", "东华门街道", 4, "街道")],
+        ),
+    }

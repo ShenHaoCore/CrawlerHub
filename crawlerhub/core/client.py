@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import time
 from typing import Any, Dict, Optional
 
@@ -24,9 +25,19 @@ from tenacity import (
     wait_exponential,
 )
 
-from crawlerhub.core.exceptions import AntiCrawlError, LoginRequiredError, RequestError
+from crawlerhub.core.exceptions import (
+    AntiCrawlError,
+    LoginRequiredError,
+    ParseError,
+    RequestError,
+)
 from crawlerhub.core.logger import logger
 from crawlerhub.utils.proxy import ProxyPool
+
+#: 重定向目标命中该模式即判定为「被送到了登录页」。
+#: 各站点登录入口五花八门（login / signin / sign-in / sign_in / passport / sso），
+#: 但对 API 请求来说，跳转到这些地址几乎只有一种含义：登录态没了。
+LOGIN_REDIRECT_RE = re.compile(r"login|sign[_-]?in|passport|sso", re.IGNORECASE)
 
 
 class RateLimiter:
@@ -230,6 +241,7 @@ class HttpClient:
                     raise RequestError(str(exc), url=url) from exc
 
                 self._check_status(response)
+                self._check_login_redirect(response)
 
                 # 请求后随机延迟，模拟人工操作
                 if self._delay_max > 0:
@@ -257,6 +269,30 @@ class HttpClient:
             raise RequestError(f"服务器错误 (HTTP {status})", url=str(response.url), status_code=status)
         response.raise_for_status()
 
+    def _check_login_redirect(self, response: httpx.Response) -> None:
+        """检测「请求被重定向到了登录页」。
+
+        这是 Cookie 失效最隐蔽的一种表现：本客户端启用了 ``follow_redirects``，
+        于是 ``302 -> https://xxx/login.php`` 会被 httpx 静默跟随，最终拿到一个
+        **HTTP 200 的 HTML 登录页**。只看状态码完全看不出来，上层往往把它误判成
+        解析失败或空数据。
+
+        这里回看重定向链：只要中间任何一跳的 ``Location`` 指向登录页特征，
+        就判定为登录态失效。
+
+        Args:
+            response: httpx 响应对象。
+
+        Raises:
+            LoginRequiredError: 重定向链中出现了登录页。
+        """
+        for past in response.history:
+            location = past.headers.get("location", "")
+            if location and LOGIN_REDIRECT_RE.search(location):
+                raise LoginRequiredError(
+                    f"请求被重定向到登录页，Cookie 可能已失效: {location}"
+                )
+
     async def get(self, url: str, **kwargs: Any) -> httpx.Response:
         """发送 GET 请求。"""
         return await self.request("GET", url, **kwargs)
@@ -264,3 +300,54 @@ class HttpClient:
     async def post(self, url: str, **kwargs: Any) -> httpx.Response:
         """发送 POST 请求。"""
         return await self.request("POST", url, **kwargs)
+
+
+def parse_json_response(response: httpx.Response, *, context: str) -> Any:
+    """解析 JSON 响应，非 JSON 时给出可读且有指向性的错误。
+
+    直接调 ``response.json()`` 时，若服务端返回的是 GBK 编码的 HTML 登录页，
+    异常信息会变成 ``'utf-8' codec can't decode byte 0xd0``——看起来像编码
+    bug，实际是登录态失效。本函数把它翻译成人能读懂的提示，并附带
+    ``Content-Type`` 与响应正文片段。
+
+    Args:
+        response: HTTP 响应对象。
+        context: 出错信息里的上下文，如 ``"微博 profile/info"``。
+
+    Returns:
+        解析后的 JSON 对象。
+
+    Raises:
+        ParseError: 响应不是合法 JSON，或响应体为空。
+    """
+    if not response.content:
+        # 显式检查：httpx 0.28 起 ``.json()`` 对空响应体不再特判，
+        # 会抛出 ``Expecting value: line 1 column 1`` —— 对「空响应=限流」
+        # 这种语义毫无指向性。
+        raise ParseError(
+            f"{context} 返回空响应体",
+            raw=(
+                f"status={response.status_code} "
+                f"content-type={response.headers.get('content-type', '')!r}"
+            ),
+        )
+
+    try:
+        parsed: Any = response.json()
+    except ValueError as exc:
+        content_type = response.headers.get("content-type", "")
+        body = response.text[:200].replace("\r", " ").replace("\n", " ")
+        hint = ""
+        if "html" in content_type.lower():
+            hint = "（返回的是 HTML 页面，常见于登录态失效被重定向到登录页）"
+        raise ParseError(
+            f"{context} 返回非 JSON{hint}: {exc}",
+            raw=f"content-type={content_type!r} body={body!r}",
+        ) from exc
+
+    if parsed is None:
+        raise ParseError(
+            f"{context} 返回空 JSON（null）",
+            raw=f"status={response.status_code}",
+        )
+    return parsed

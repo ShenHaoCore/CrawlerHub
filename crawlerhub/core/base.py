@@ -15,6 +15,7 @@ from crawlerhub.core.client import HttpClient
 from crawlerhub.core.config import Config
 from crawlerhub.core.cookie import CookieManager
 from crawlerhub.core.dedup import BaseDedup, create_dedup
+from crawlerhub.core.exceptions import LoginRequiredError
 from crawlerhub.core.logger import logger
 from crawlerhub.core.storage import BaseStorage, create_storage
 from crawlerhub.utils.proxy import ProxyPool
@@ -152,6 +153,10 @@ class BaseCrawler(ABC):
 
         Returns:
             用户信息字典列表。
+
+        Raises:
+            LoginRequiredError: 登录态失效。这是**会话级**的致命错误，
+                重试其余用户不会有不同结果，因此直接向上抛出。
         """
         results: List[Dict[str, Any]] = []
         for uid in user_ids:
@@ -164,6 +169,13 @@ class BaseCrawler(ABC):
                 results.append(user)
                 await self.storage.save(user, f"{self.platform_name}_users")
                 logger.info(f"[{self.platform_name}] 已保存用户 {uid}")
+            except LoginRequiredError as exc:
+                # 登录态是全局共享的：一个用户拉不到，其余用户同样拉不到。
+                # 若在此吞掉，任务会以「0 条 + status: ok」收尾，掩盖真实故障。
+                logger.error(
+                    f"[{self.platform_name}] 登录态失效，终止本次抓取: {exc}"
+                )
+                raise
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"[{self.platform_name}] 爬取用户 {uid} 失败: {exc}")
         return results
@@ -191,6 +203,10 @@ class BaseCrawler(ABC):
 
         Returns:
             所有爬取到的用户信息字典列表。
+
+        Raises:
+            LoginRequiredError: 登录态失效。抛出时已抓到的用户均已落盘，
+                未抓到的部分无法继续——因为失效的 Cookie 对所有用户一视同仁。
         """
         results: List[Dict[str, Any]] = []
 
@@ -219,15 +235,25 @@ class BaseCrawler(ABC):
                         results.append(user)
                         await self.storage.save(user, f"{self.platform_name}_users")
                         logger.info(f"[{self.platform_name}] 已保存用户 {uid}")
+                    except LoginRequiredError as exc:
+                        logger.error(
+                            f"[{self.platform_name}] 登录态失效，终止本次抓取: {exc}"
+                        )
+                        raise
                     except Exception as exc:  # noqa: BLE001
                         logger.error(f"[{self.platform_name}] 爬取用户 {uid} 失败: {exc}")
 
                 # 2. 拉取关联用户（最后一层不再扩展）
+                # 与「抓用户本身」不同，这里失败只损失扩展能力，用户数据已落盘，
+                # 因此保持降级：记一条警告后继续下一个用户，不中断整个任务。
                 if depth < max_depth:
                     try:
                         related_ids = await self.fetch_related_users(uid)
                     except Exception as exc:  # noqa: BLE001
-                        logger.error(f"[{self.platform_name}] 获取 {uid} 关联用户失败: {exc}")
+                        logger.warning(
+                            f"[{self.platform_name}] 获取 {uid} 关联用户失败"
+                            f"（仅影响扩展，已抓数据保留）: {exc}"
+                        )
                         continue
 
                     if related_ids:

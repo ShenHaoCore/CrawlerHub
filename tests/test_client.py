@@ -6,8 +6,18 @@
 import pytest
 import httpx
 
-from crawlerhub.core.client import HttpClient, RateLimiter
-from crawlerhub.core.exceptions import AntiCrawlError, LoginRequiredError, RequestError
+from crawlerhub.core.client import (
+    LOGIN_REDIRECT_RE,
+    HttpClient,
+    RateLimiter,
+    parse_json_response,
+)
+from crawlerhub.core.exceptions import (
+    AntiCrawlError,
+    LoginRequiredError,
+    ParseError,
+    RequestError,
+)
 
 
 def make_mock_client(handler, **kwargs) -> HttpClient:
@@ -158,3 +168,123 @@ class TestHttpClient:
         await client.get("https://test.com/api", params={"page": "1", "size": "20"})
         assert "page=1" in captured["url"]
         assert "size=20" in captured["url"]
+
+
+class TestLoginRedirectDetection:
+    """Cookie 失效时常表现为「被重定向到登录页」，且最终可能拿到 HTTP 200。
+
+    仅看状态码完全无法识别——这正是它最容易被误判成解析 bug 的原因。
+    """
+
+    @staticmethod
+    def _redirect_to_login(request: httpx.Request) -> httpx.Response:
+        """模拟微博的行为：API 地址 302 到登录页，登录页返回 200 HTML。"""
+        if "login" in str(request.url):
+            return httpx.Response(
+                200,
+                text="<html>请登录</html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+        return httpx.Response(
+            302,
+            headers={"location": "https://login.sina.com.cn/sso/login.php?url=x"},
+        )
+
+    async def test_redirect_to_login_raises(self) -> None:
+        client = make_mock_client(self._redirect_to_login, max_retries=1)
+
+        with pytest.raises(LoginRequiredError, match="重定向到登录页"):
+            await client.get("https://weibo.com/ajax/profile/info")
+
+    async def test_direct_200_html_is_not_flagged(self) -> None:
+        """没有重定向时不应误报——只有重定向链才会被判定为登录页。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text="<html>某个正常返回的 HTML 页面</html>",
+                headers={"content-type": "text/html; charset=utf-8"},
+            )
+
+        client = make_mock_client(handler, max_retries=1)
+        resp = await client.get("https://test.com/api")
+
+        assert resp.status_code == 200
+
+    async def test_ordinary_redirect_not_flagged(self) -> None:
+        """普通的非登录类重定向（如接口版本跳转）不应被误判。"""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "/v2/" in str(request.url):
+                return httpx.Response(200, json={"ok": True})
+            return httpx.Response(302, headers={"location": "https://test.com/v2/api"})
+
+        client = make_mock_client(handler, max_retries=1)
+        resp = await client.get("https://test.com/api")
+
+        assert resp.json()["ok"] is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://login.sina.com.cn/sso/login.php?url=x",
+            "https://passport.example.com/signin",
+            "https://example.com/sso/authorize",
+            "https://example.com/SIGN_IN",
+        ],
+    )
+    def test_pattern_matches_login_entrypoints(self, url: str) -> None:
+        assert LOGIN_REDIRECT_RE.search(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://weibo.com/ajax/profile/info",
+            "https://dmfw.mca.gov.cn/9095/xzqh/getList",
+            "https://test.com/v2/api",
+        ],
+    )
+    def test_pattern_ignores_normal_api_urls(self, url: str) -> None:
+        assert not LOGIN_REDIRECT_RE.search(url)
+
+
+class TestParseJsonResponse:
+    """非 JSON 响应应给出可读、有指向性的错误，而不是编码解码异常。"""
+
+    def test_valid_json_returned(self) -> None:
+        resp = httpx.Response(200, json={"ok": True})
+        assert parse_json_response(resp, context="测试接口") == {"ok": True}
+
+    def test_gbk_html_raises_readable_parse_error(self) -> None:
+        """复现真实场景：服务端返回 GBK 编码的 HTML 登录页。
+
+        原实现抛的是 ``'utf-8' codec can't decode byte 0xd0``，
+        完全看不出问题是登录态失效。
+        """
+        resp = httpx.Response(
+            200,
+            content="<html>登录</html>".encode("gbk"),
+            headers={"content-type": "text/html; charset=utf-8"},
+        )
+
+        with pytest.raises(ParseError, match="HTML 页面") as exc_info:
+            parse_json_response(resp, context="微博 profile/info")
+
+        assert "微博 profile/info" in str(exc_info.value)
+        assert "html" in (exc_info.value.raw or "").lower()
+
+    def test_empty_body_raises(self) -> None:
+        resp = httpx.Response(200, content=b"")
+
+        with pytest.raises(ParseError, match="空响应体"):
+            parse_json_response(resp, context="抖音 列表")
+
+    def test_plain_text_raises_without_html_hint(self) -> None:
+        resp = httpx.Response(
+            200, text="not json", headers={"content-type": "text/plain"}
+        )
+
+        with pytest.raises(ParseError) as exc_info:
+            parse_json_response(resp, context="测试接口")
+
+        assert "HTML 页面" not in str(exc_info.value)

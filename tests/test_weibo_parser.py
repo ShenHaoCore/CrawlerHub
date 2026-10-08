@@ -2,8 +2,12 @@
 
 import pytest
 
-from crawlerhub.core.exceptions import ParseError
-from crawlerhub.platforms.weibo.parser import parse_user_info
+from crawlerhub.core.exceptions import LoginRequiredError, ParseError
+from crawlerhub.platforms.weibo.parser import (
+    parse_follow_list,
+    parse_user_info,
+    raise_if_login_required,
+)
 
 
 class TestWeiboParser:
@@ -47,3 +51,64 @@ class TestWeiboParser:
     def test_parse_invalid_input_raises(self) -> None:
         with pytest.raises(ParseError, match="解析微博用户信息失败"):
             parse_user_info("not a dict", {}, "123")  # type: ignore[arg-type]
+
+
+class TestWeiboLoginRequired:
+    """微博对失效 Cookie 并不总是返回 302，也可能返回 200 + 业务码 ``ok=-100``。
+
+    这种「200 里藏着错误」的响应，既不触发状态码检查，也不会让 JSON 解析失败，
+    必须在业务层显式判定，否则会被当成「抓到 0 条」而静默吞掉。
+    """
+
+    def test_ok_minus_100_raises_login_required(self) -> None:
+        raw = {"ok": -100, "url": "https://weibo.com/login.php?url=x"}
+
+        with pytest.raises(LoginRequiredError, match="Cookie 已失效"):
+            raise_if_login_required(raw, api="friendships/friends(fans)")
+
+    def test_login_url_with_other_code_raises_login_required(self) -> None:
+        raw = {"ok": -1, "url": "https://weibo.com/login.php"}
+
+        with pytest.raises(LoginRequiredError):
+            raise_if_login_required(raw, api="profile/info")
+
+    def test_success_code_passes(self) -> None:
+        raise_if_login_required({"ok": 1, "users": []}, api="profile/info")
+
+    def test_missing_ok_passes(self) -> None:
+        """没有业务码的响应（如新版 data 结构）不应被误判。"""
+        raise_if_login_required({"data": {"user": {}}}, api="profile/info")
+
+    def test_non_dict_payload_passes(self) -> None:
+        raise_if_login_required([1, 2, 3], api="profile/info")  # type: ignore[arg-type]
+
+    def test_other_business_error_raises_parse_error(self) -> None:
+        with pytest.raises(ParseError, match="业务错误 ok=-5"):
+            raise_if_login_required({"ok": -5}, api="profile/info")
+
+
+class TestWeiboFollowListShapes:
+    """``parse_follow_list`` 需同时兼容新旧两种列表位置。"""
+
+    def test_top_level_users(self) -> None:
+        raw = {"users": [{"idstr": "111"}, {"id": 222}]}
+        assert parse_follow_list(raw) == ["111", "222"]
+
+    def test_nested_data_list(self) -> None:
+        raw = {"data": {"list": [{"id": 333}, {"uid": 444}]}}
+        assert parse_follow_list(raw) == ["333", "444"]
+
+    def test_non_dict_items_are_skipped(self) -> None:
+        raw = {"users": [{"id": 1}, "bad", None, 42]}
+        assert parse_follow_list(raw) == ["1"]
+
+    def test_login_required_payload_yields_empty(self) -> None:
+        """真实失效响应的形状：既没有 users 也没有 data。"""
+        raw = {"ok": -100, "url": "https://weibo.com/login.php?url=x"}
+        assert parse_follow_list(raw) == []
+
+    def test_empty_structures(self) -> None:
+        assert parse_follow_list({}) == []
+        assert parse_follow_list({"users": []}) == []
+        assert parse_follow_list({"data": {"list": []}}) == []
+        assert parse_follow_list({"data": None}) == []

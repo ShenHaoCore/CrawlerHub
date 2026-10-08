@@ -2,10 +2,8 @@
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import httpx
-import pytest
 
 from crawlerhub.core.client import HttpClient
 from crawlerhub.core.config import Config

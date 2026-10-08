@@ -10,6 +10,8 @@ from crawlerhub.platforms.registry import (
     list_platforms,
     register_platform,
 )
+from crawlerhub.platforms.weibo.crawler import WeiboCrawler
+from crawlerhub.platforms.xzqh.crawler import XzqhCrawler
 
 
 class TestRegistry:
@@ -17,15 +19,21 @@ class TestRegistry:
         platforms = list_platforms()
         assert "weibo" in platforms
         assert "douyin" in platforms
+        assert "xzqh" in platforms
 
     def test_get_weibo_cls(self) -> None:
         cls = get_platform_cls("weibo")
-        assert cls.__name__ == "WeiboCrawler"
+        assert cls is WeiboCrawler
         assert issubclass(cls, BaseCrawler)
 
     def test_get_douyin_cls(self) -> None:
         cls = get_platform_cls("douyin")
-        assert cls.__name__ == "DouyinCrawler"
+        assert cls is DouyinCrawler
+        assert issubclass(cls, BaseCrawler)
+
+    def test_get_xzqh_cls(self) -> None:
+        cls = get_platform_cls("xzqh")
+        assert cls is XzqhCrawler
         assert issubclass(cls, BaseCrawler)
 
     def test_unknown_platform_raises(self) -> None:
@@ -49,5 +57,5 @@ class TestRegistry:
         # 清理
         PLATFORM_REGISTRY.pop("fake", None)
 
-    def test_registry_has_two_platforms(self) -> None:
-        assert len(PLATFORM_REGISTRY) == 2
+    def test_registry_has_three_platforms(self) -> None:
+        assert len(PLATFORM_REGISTRY) == 3

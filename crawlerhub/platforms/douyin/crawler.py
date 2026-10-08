@@ -16,10 +16,17 @@ import base64
 import os
 from typing import Any, Dict, List, Optional
 
-from crawlerhub.core.exceptions import LoginRequiredError, ParseError
+from crawlerhub.core.client import parse_json_response
+from crawlerhub.core.exceptions import LoginRequiredError
 from crawlerhub.core.logger import logger
 from crawlerhub.platforms.base import BaseCrawler
 from crawlerhub.platforms.douyin.parser import parse_follow_list, parse_user_info
+
+#: 抖音接口的业务成功码。
+API_STATUS_SUCCESS = 0
+
+#: 抖音接口表示「未登录」的业务码（Cookie 或 msToken 失效）。
+API_STATUS_NOT_LOGGED_IN = 8
 
 
 class DouyinCrawler(BaseCrawler):
@@ -77,11 +84,13 @@ class DouyinCrawler(BaseCrawler):
 
         logger.info(f"[douyin] 开始爬取用户 {user_id}")
         response = await self.client.get(url, params=params, cookies=cookies)
+        raw = parse_json_response(response, context="抖音 user/profile/other")
 
-        try:
-            raw = response.json()
-        except ValueError as exc:
-            raise ParseError(f"抖音接口返回非 JSON: {exc}") from exc
+        if raw.get("status_code") == API_STATUS_NOT_LOGGED_IN:
+            raise LoginRequiredError(
+                f"抖音接口需要登录态（status_code=8: {raw.get('status_msg', '用户未登录')}），"
+                "请更新 data/cookies/douyin.json"
+            )
 
         logger.debug(f"[douyin] 接口返回: {str(raw)[:500]}")
         return parse_user_info(raw, user_id)
@@ -158,18 +167,17 @@ class DouyinCrawler(BaseCrawler):
                 logger.warning(f"[douyin] {endpoint} 接口返回空响应，疑似限流，退避 30 秒")
                 await asyncio.sleep(30)
                 break
-            try:
-                raw = resp.json()
-            except ValueError as exc:
-                raise ParseError(f"抖音 {endpoint} 列表返回非 JSON: {exc}") from exc
+            raw = parse_json_response(resp, context=f"抖音 {endpoint} 列表")
 
-            status_code = raw.get("status_code", 0)
-            if status_code == 8:
-                # 用户未登录，通常是 msToken 失效
+            status_code = raw.get("status_code", API_STATUS_SUCCESS)
+            if status_code == API_STATUS_NOT_LOGGED_IN:
+                # 未登录，通常是 msToken 失效。关联用户属于「扩展」数据，
+                # 用户本体已经落盘，因此这里降级处理：记警告后停止翻页，
+                # 不中断整个任务（与基类对「关联用户扩展」失败的策略一致）。
                 msg = raw.get("status_msg", "用户未登录")
                 logger.warning(
-                    f"[douyin] {endpoint} 接口返回未登录: {msg}，"
-                    "请从浏览器更新 Cookie 中的 msToken"
+                    f"[douyin] {endpoint} 接口返回未登录（status_code=8: {msg}），"
+                    "请更新 data/cookies/douyin.json 中的 msToken；本次仅停止扩展"
                 )
                 break
 

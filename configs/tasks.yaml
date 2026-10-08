@@ -1,15 +1,31 @@
 # 多平台并发任务配置
-# 用法: python -m crawlerhub
+# 用法: python -m crawlerhub      （无命令行参数，全部由本文件驱动）
 #
-# 每个平台独立配置 uids，各平台并发执行
-# crawl_related: 启用关联用户爬取（粉丝+关注列表），1 层深度
+# 每个平台是一个**独立任务**，并发启动、互不干扰：
+#   - 单个任务失败 / 超时 / 崩溃，只影响它自己，其余任务照常跑完；
+#   - 每个任务持有独立的配置、HTTP 客户端、Cookie、去重器与存储实例；
+#   - 任务级参数写在平台块内，其余键会覆盖 configs/platforms/<平台>.yaml。
 #
-# 持续运行：设置 schedule.enabled = true，interval 为两次运行间隔（秒）
-# 例如 interval: 3600 表示每小时运行一次
+# 通用配置：
+#   max_concurrent          同时运行的任务数上限，0 或省略 = 不限（默认全并发）
+#   schedule.enabled        true 时按 interval 秒循环执行整批任务
+#   schedule.interval       循环间隔（秒）
+#
+# 平台级配置：
+#   enabled                 false 可临时停用该任务，无需删除配置（默认 true）
+#   timeout                 该任务超时秒数，超时只终止该任务自身，0 或省略 = 不限
+#   uids                    目标 ID 列表（微博 UID / 抖音 sec_uid / 区划 12 位代码）
+#   full                    true 走全量快照模式（需平台实现 run_all，如 xzqh）
+#   crawl_related           是否爬取关联对象（粉丝 + 关注）
+#   max_related_per_user    每个节点最多爬取多少个关联对象
+#   max_depth               关联对象最大爬取深度（1=直接关联，2=关联的关联）
+#   storage / cookie_file   覆盖存储后端 / Cookie 文件路径
+
+max_concurrent: 0           # 0 = 不限并发，所有任务同时启动
 
 schedule:
-  enabled: false          # 是否启用定时持续运行
-  interval: 3600          # 运行间隔（秒），默认 1 小时
+  enabled: false            # 是否启用定时持续运行
+  interval: 3600            # 运行间隔（秒），默认 1 小时
 
 platforms:
   weibo:
@@ -18,8 +34,10 @@ platforms:
     crawl_related: true        # 启用关联用户爬取
     max_related_per_user: 20   # 每个用户最多爬取多少个关联用户（建议 <= 20 避免风控）
     max_depth: 2               # 关联用户最大爬取深度（1=直接关联，2=关联的关联，以此类推）
-    # cookie_file: "data/cookies/weibo.json"
+    # enabled: false           # 临时停用该任务
+    # timeout: 1800            # 该任务超过 30 分钟即单独中止
     # storage: "json"
+    # cookie_file: "data/cookies/weibo.json"
 
   douyin:
     uids:
@@ -28,3 +46,16 @@ platforms:
     max_related_per_user: 20
     max_depth: 2
     # cookie_file: "data/cookies/douyin.json"
+
+  # 中国行政区划（数据来源：民政部·国家地名信息库）
+  # 该接口是政府开放数据，不依赖 Cookie，可独立运行。
+  # full: true 走全国四级全量快照（约 452 次请求，耗时约 5 分钟），
+  # 结果**覆盖写入** data/output/xzqh_tree.json 与 xzqh_divisions.jsonl。
+  # 只想抓指定区划的子树时，去掉 full 改配 uids（12 位行政区划代码）即可。
+  # 注意：任务级 timeout 默认不限，全量快照勿设过小，否则会被提前中止。
+  xzqh:
+    full: true
+    timeout: 1800              # 全量约 5 分钟，留足余量
+    # enabled: false           # 临时停用该任务
+    # uids:
+    #   - "110000000000"       # 12 位行政区划代码，如北京市

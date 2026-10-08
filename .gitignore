@@ -18,10 +18,11 @@ env/
 # Poetry
 poetry.lock
 
-# IDE
+# IDE / 本地工具数据
 .vscode/
 .idea/
 .trae/
+.workbuddy/
 *.swp
 *.swo
 
